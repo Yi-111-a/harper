@@ -602,48 +602,47 @@ impl Document {
         self.tokens.remove_indices(remove_these);
     }
 
-    /// Condenses words like "i.e.", "e.g." and "N.S.A." down to single words
-    /// using a state machine.
+    /// Condenses words like "i.e.", "e.g." and "N.S.A." down to single words.
     fn condense_dotted_initialisms(&mut self) {
-        if self.tokens.len() < 2 {
+        if self.tokens.len() < 4 {
             return;
         }
 
         let mut to_remove = VecDeque::new();
+        let mut i = 0;
 
-        let mut cursor = 1;
+        while i + 1 < self.tokens.len() {
+            if self.tokens[i].kind.is_word()
+                && self.tokens[i].span.len() == 1
+                && self.tokens[i + 1].kind.is_period()
+                && self.tokens[i].span.end == self.tokens[i + 1].span.start
+            {
+                let start = i;
+                let mut chunk_count = 1;
+                let mut cur = i + 2;
 
-        let mut initialism_start = None;
-
-        loop {
-            let a = &self.tokens[cursor - 1];
-            let b = &self.tokens[cursor];
-
-            let is_initialism_chunk = a.kind.is_word() && a.span.len() == 1 && b.kind.is_period();
-
-            if is_initialism_chunk {
-                if initialism_start.is_none() {
-                    initialism_start = Some(cursor - 1);
-                } else {
-                    to_remove.push_back(cursor - 1);
+                while cur + 1 < self.tokens.len()
+                    && self.tokens[cur - 1].span.end == self.tokens[cur].span.start
+                    && self.tokens[cur].kind.is_word()
+                    && self.tokens[cur].span.len() == 1
+                    && self.tokens[cur + 1].kind.is_period()
+                    && self.tokens[cur].span.end == self.tokens[cur + 1].span.start
+                {
+                    chunk_count += 1;
+                    cur += 2;
                 }
 
-                to_remove.push_back(cursor);
-                cursor += 1;
+                if chunk_count >= 2 {
+                    let end_span = self.tokens[cur - 1].span.end;
+                    self.tokens[start].span.end = end_span;
+                    for remove_idx in (start + 1)..cur {
+                        to_remove.push_back(remove_idx);
+                    }
+                }
+
+                i = cur;
             } else {
-                if let Some(start) = initialism_start {
-                    let end = self.tokens[cursor - 2].span.end;
-                    let start_tok: &mut Token = &mut self.tokens[start];
-                    start_tok.span.end = end;
-                }
-
-                initialism_start = None;
-            }
-
-            cursor += 1;
-
-            if cursor >= self.tokens.len() - 1 {
-                break;
+                i += 1;
             }
         }
 
@@ -1041,6 +1040,21 @@ mod tests {
     #[test]
     fn condenses_nsa() {
         assert_token_count(r#"Condenses words like "i.e.", "e.g." and "N.S.A.""#, 20);
+    }
+
+    #[test]
+    fn does_not_condense_single_letter_sentence_terminator() {
+        let text = "The right button is A and bottom is B. There was no way to remap.";
+        let doc = Document::new_plain_english_curated(text);
+        let sentences: Vec<_> = doc.iter_sentences().collect();
+        assert_eq!(sentences.len(), 2);
+    }
+
+    #[test]
+    fn condenses_initialism_at_end_of_text() {
+        let text = "I work for the N.S.A.";
+        let doc = Document::new_plain_english_curated(text);
+        assert_eq!(doc.tokens.last().unwrap().span.len(), 6);
     }
 
     #[test]
